@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SignRead — Live Sign Recognition</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/onnxruntime-web/1.23.2/ort.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Caveat:wght@600;700&family=Work+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --cream:#F3E7D6;
+    --paper:#FFFBF4;
+    --cabernet:#3E0E1F;
+    --mulberry:#82233F;
+    --mulberry-deep:#5C1830;
+    --dustyrose:#E9C3C0;
+    --dustyrose-soft:#F3DEDC;
+    --olive:#6B6E27;
+    --chartreuse:#AEB84A;
+    --champagne:#B99677;
+    --ink:#301419;
+    --dim:#7a5c62;
+    --good:#5C7A2E;
+    --line:rgba(62,14,31,0.14);
+    --mono:'Work Sans', sans-serif;
+    --serif:'Fraunces', serif;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--cream);
+    color:var(--ink);
+    font-family:'Work Sans', sans-serif;
+    min-height:100vh;
+  }
+  .wrap{
+    max-width:1040px;
+    margin:0 auto;
+    padding:32px 20px 60px;
+  }
+  header{
+    display:flex;
+    justify-content:space-between;
+    align-items:flex-end;
+    border-bottom:1px solid var(--line);
+    padding-bottom:18px;
+    margin-bottom:28px;
+    gap:20px;
+    flex-wrap:wrap;
+  }
+  .brand{
+    font-family:var(--serif);
+    font-size:28px;
+    letter-spacing:0.3px;
+    font-weight:600;
+  }
+  .brand span{color:var(--mulberry);}
+  .brand-sub{
+    color:var(--dim);
+    font-size:13.5px;
+    margin-top:6px;
+  }
+  .brand-sub a{color:var(--mulberry); font-weight:600; text-decoration:none;}
+  .brand-sub a:hover{text-decoration:underline;}
+  .status{
+    font-size:12.5px;
+    color:var(--dim);
+    text-align:right;
+    line-height:1.6;
+    max-width:360px;
+    word-wrap:break-word;
+    font-weight:500;
+  }
+  .status .dot{
+    display:inline-block;
+    width:7px;height:7px;
+    border-radius:50%;
+    background:#c9b7ac;
+    margin-right:6px;
+  }
+  .status.ready .dot{background:var(--good); box-shadow:0 0 8px var(--good);}
+  .status.error .dot{background:#b5423f;}
+
+  .grid{
+    display:grid;
+    grid-template-columns:1.15fr 0.85fr;
+    gap:24px;
+  }
+  @media (max-width: 760px){ .grid{grid-template-columns:1fr;} }
+
+  .panel{
+    background:var(--paper);
+    border:1px solid var(--line);
+    border-radius:20px;
+    padding:0;
+    overflow:hidden;
+    box-shadow:0 12px 28px rgba(62,14,31,0.08);
+  }
+  .panel-label{
+    font-family:'Caveat', cursive;
+    font-size:19px;
+    font-weight:700;
+    color:var(--mulberry-deep);
+    padding:14px 20px 6px;
+  }
+
+  .camera-box{
+    position:relative;
+    aspect-ratio:4/3;
+    background:#1a1013;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+  }
+  video{
+    width:100%;
+    height:100%;
+    object-fit:cover;
+    transform:scaleX(-1);
+  }
+  .camera-box.hidden video{display:none;}
+  .cam-placeholder{
+    color:#d8bfc4;
+    font-size:14px;
+    text-align:center;
+    padding:20px;
+  }
+  .roi-frame{
+    position:absolute;
+    top:12%; left:28%; right:28%; bottom:12%;
+    border:2px dashed var(--chartreuse);
+    border-radius:16px;
+    pointer-events:none;
+  }
+  .reading-badge{
+    position:absolute;
+    top:10px; left:10px;
+    background:rgba(62,14,31,0.75);
+    padding:5px 12px;
+    border-radius:20px;
+    font-size:11.5px;
+    color:var(--cream);
+    font-weight:600;
+  }
+
+  .controls{
+    display:flex;
+    gap:10px;
+    padding:16px 20px;
+    border-top:1px solid var(--line);
+    flex-wrap:wrap;
+  }
+  button{
+    font-family:'Work Sans', sans-serif;
+    font-size:13.5px;
+    font-weight:600;
+    background:var(--paper);
+    border:1.5px solid var(--champagne);
+    color:var(--ink);
+    padding:10px 18px;
+    border-radius:30px;
+    cursor:pointer;
+    transition:transform .15s ease, box-shadow .15s ease, background .15s ease;
+  }
+  button:hover{transform:translateY(-2px); box-shadow:0 8px 16px rgba(62,14,31,0.14); background:var(--dustyrose-soft);}
+  button.primary{
+    background:var(--mulberry);
+    border-color:var(--mulberry);
+    color:var(--cream);
+  }
+  button.primary:hover{background:var(--mulberry-deep); box-shadow:0 10px 20px rgba(130,35,63,0.35);}
+  button:disabled{opacity:0.4; cursor:not-allowed; transform:none; box-shadow:none;}
+
+  .predict-panel{padding:22px 20px 8px;}
+  .letter-display{
+    display:flex;
+    align-items:baseline;
+    gap:18px;
+    margin-bottom:6px;
+  }
+  .letter-big{
+    font-family:var(--serif);
+    font-size:96px;
+    font-weight:700;
+    line-height:1;
+    color:var(--mulberry);
+    min-width:110px;
+    text-align:center;
+  }
+  .letter-meta{flex:1;}
+  .conf-label{
+    font-family:'Caveat', cursive;
+    font-size:16px;
+    font-weight:700;
+    color:var(--olive);
+    margin-bottom:6px;
+  }
+  .conf-bar-track{
+    height:8px;
+    background:var(--dustyrose-soft);
+    border-radius:6px;
+    overflow:hidden;
+    margin-bottom:8px;
+  }
+  .conf-bar-fill{
+    height:100%;
+    background:var(--chartreuse);
+    width:0%;
+    transition:width .12s linear;
+    border-radius:6px;
+  }
+  .conf-value{
+    font-size:13.5px;
+    color:var(--dim);
+    font-weight:600;
+  }
+  .top3{
+    display:flex;
+    gap:8px;
+    margin-top:14px;
+    flex-wrap:wrap;
+  }
+  .chip{
+    font-size:12.5px;
+    font-weight:600;
+    border:1.5px solid var(--champagne);
+    padding:5px 12px;
+    border-radius:20px;
+    color:var(--dim);
+    background:var(--cream);
+  }
+  .chip b{color:var(--mulberry);}
+
+  .word-panel{padding:18px 20px;border-top:1px solid var(--line);}
+  .word-out{
+    font-family:var(--serif);
+    font-size:34px;
+    font-weight:600;
+    min-height:46px;
+    letter-spacing:1px;
+    word-break:break-all;
+    border-bottom:1px solid var(--line);
+    padding-bottom:10px;
+    margin-bottom:12px;
+    color:var(--cabernet);
+  }
+  .word-out .cursor{
+    display:inline-block;
+    width:2px;height:30px;
+    background:var(--mulberry);
+    vertical-align:middle;
+    animation:blink 1s step-start infinite;
+    margin-left:2px;
+  }
+  @keyframes blink{50%{opacity:0;}}
+  .word-actions{display:flex;gap:8px;flex-wrap:wrap;}
+
+  .hint{
+    font-size:13.5px;
+    color:var(--dim);
+    line-height:1.6;
+    padding:16px 20px 22px;
+  }
+  .hint b{color:var(--mulberry-deep);}
+
+  footer{
+    margin-top:28px;
+    font-family:'Caveat', cursive;
+    font-size:18px;
+    color:var(--olive);
+    text-align:center;
+  }
+
+  .mode-row{
+    display:flex;
+    justify-content:center;
+    margin-bottom:20px;
+  }
+  .mode-toggle{
+    display:inline-flex;
+    background:var(--paper);
+    border:1.5px solid var(--line);
+    border-radius:30px;
+    padding:4px;
+    gap:4px;
+    box-shadow:0 4px 12px rgba(62,14,31,0.06);
+  }
+  .mode-btn{
+    font-family:'Work Sans', sans-serif;
+    font-size:13.5px;
+    font-weight:700;
+    background:transparent;
+    border:none;
+    color:var(--dim);
+    padding:9px 22px;
+    border-radius:26px;
+    cursor:pointer;
+    transition:background .15s ease, color .15s ease;
+  }
+  .mode-btn:hover{color:var(--ink); box-shadow:none; transform:none;}
+  .mode-btn.active{
+    background:var(--mulberry);
+    color:var(--cream);
+  }
+  .mode-btn.active:hover{color:var(--cream);}
+  .mode-btn:disabled{opacity:0.5; cursor:not-allowed;}
+
+  canvas#hidden-canvas{display:none;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div>
+      <div class="brand">Sign<span>Read</span></div>
+      <div class="brand-sub">alphabet + digit + word recognition · runs entirely in your browser · <a href="index.html" style="color:var(--accent); text-decoration:none;">← back to home</a></div>
+    </div>
+    <div class="status" id="statusBox">
+      <span class="dot"></span><span id="statusText">loading model…</span>
+    </div>
+  </header>
+
+  <div class="mode-row">
+    <div class="mode-toggle" id="modeToggle">
+      <button class="mode-btn active" data-mode="letters" id="modeLettersBtn">Letters</button>
+      <button class="mode-btn" data-mode="numbers" id="modeNumbersBtn">Numbers</button>
+      <button class="mode-btn" data-mode="words" id="modeWordsBtn">Words</button>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="panel">
+      <div class="panel-label">Camera</div>
+      <div class="camera-box hidden" id="cameraBox">
+        <div class="cam-placeholder" id="camPlaceholder">Camera is off.<br>Press "Start camera" to begin.</div>
+        <video id="video" autoplay playsinline muted></video>
+        <div class="roi-frame" id="roiFrame" style="display:none;"></div>
+        <div class="reading-badge" id="readingBadge" style="display:none;">reading center frame</div>
+      </div>
+      <div class="controls">
+        <button class="primary" id="startBtn">Start camera</button>
+        <button id="stopBtn" disabled>Stop camera</button>
+        <button id="pauseBtn" disabled>Pause reading</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-label">Prediction</div>
+      <div class="predict-panel">
+        <div class="letter-display">
+          <div class="letter-big" id="letterBig">–</div>
+          <div class="letter-meta">
+            <div class="conf-label">Confidence</div>
+            <div class="conf-bar-track"><div class="conf-bar-fill" id="confFill"></div></div>
+            <div class="conf-value" id="confValue">0%</div>
+          </div>
+        </div>
+        <div class="top3" id="top3"></div>
+      </div>
+
+      <div class="word-panel">
+        <div class="panel-label" style="padding:0 0 10px; border:none;">Word built</div>
+        <div class="word-out" id="wordOut"><span class="cursor"></span></div>
+        <div class="word-actions">
+          <button id="spaceBtn">Add space</button>
+          <button id="backspaceBtn">⌫ Delete</button>
+          <button id="clearBtn">Clear</button>
+        </div>
+      </div>
+
+      <div class="hint">
+        Hold a sign steady inside the dashed box. A letter is added once the same
+        sign is held for about <b>a second</b>, so brief transitions between
+        signs aren't accidentally typed.
+      </div>
+    </div>
+  </div>
+
+  <footer>reads letters, numbers, or words, right in your browser — no uploads, ever</footer>
+</div>
+
+<canvas id="hidden-canvas" width="224" height="224"></canvas>
+
+<script>
+const MEAN = [0.485, 0.456, 0.406];
+const STD  = [0.229, 0.224, 0.225];
+const HOLD_FRAMES_TO_COMMIT = 8;   // roughly ~1s at our sampling interval
+const SAMPLE_INTERVAL_MS = 130;
+const CONF_THRESHOLD = 0.4;
+
+const MODEL_FILES = {
+  letters: { model: 'sign_model.onnx', classes: 'classes.json' },
+  numbers: { model: 'numbers_model.onnx', classes: 'numbers_classes.json' },
+  words: { model: 'words_model.onnx', classes: 'words_classes.json' }
+};
+let currentMode = 'letters';
+
+let session = null;
+let CLASSES = [];
+let stream = null;
+let running = false;
+let paused = false;
+let sampleTimer = null;
+
+let lastLetter = null;
+let holdCount = 0;
+let committedGuard = null; // prevents re-adding the same letter until sign changes
+
+const video = document.getElementById('video');
+const cameraBox = document.getElementById('cameraBox');
+const camPlaceholder = document.getElementById('camPlaceholder');
+const roiFrame = document.getElementById('roiFrame');
+const readingBadge = document.getElementById('readingBadge');
+const startBtn = document.getElementById('startBtn');
+const stopBtn = document.getElementById('stopBtn');
+const pauseBtn = document.getElementById('pauseBtn');
+const statusBox = document.getElementById('statusBox');
+const statusText = document.getElementById('statusText');
+const letterBig = document.getElementById('letterBig');
+const confFill = document.getElementById('confFill');
+const confValue = document.getElementById('confValue');
+const top3El = document.getElementById('top3');
+const wordOut = document.getElementById('wordOut');
+const spaceBtn = document.getElementById('spaceBtn');
+const backspaceBtn = document.getElementById('backspaceBtn');
+const clearBtn = document.getElementById('clearBtn');
+const modeLettersBtn = document.getElementById('modeLettersBtn');
+const modeNumbersBtn = document.getElementById('modeNumbersBtn');
+const modeWordsBtn = document.getElementById('modeWordsBtn');
+
+let wordText = '';
+
+function setStatus(msg, kind){
+  statusText.textContent = msg;
+  statusBox.className = 'status' + (kind ? ' ' + kind : '');
+}
+
+function renderWord(){
+  wordOut.innerHTML = (wordText.length ? wordText : '') + '<span class="cursor"></span>';
+}
+
+async function loadModel(mode){
+  try{
+    session = null; // guards sampleFrame from firing mid-swap
+    setStatus(`loading ${mode} model…`);
+    startBtn.disabled = true;
+    modeLettersBtn.disabled = true;
+    modeNumbersBtn.disabled = true;
+    modeWordsBtn.disabled = true;
+
+    const files = MODEL_FILES[mode];
+    const cRes = await fetch(files.classes);
+    CLASSES = await cRes.json();
+
+    ort.env.wasm.wasmPaths = 'https://cdnjs.cloudflare.com/ajax/libs/onnxruntime-web/1.23.2/';
+    ort.env.wasm.numThreads = 1;
+    ort.env.wasm.simd = true;
+
+    session = await ort.InferenceSession.create(files.model, {
+      executionProviders: ['wasm']
+    });
+
+    currentMode = mode;
+    modeLettersBtn.classList.toggle('active', mode === 'letters');
+    modeNumbersBtn.classList.toggle('active', mode === 'numbers');
+    modeWordsBtn.classList.toggle('active', mode === 'words');
+
+    // reset prediction state so a stale letter/digit from the old mode doesn't linger
+    lastLetter = null;
+    holdCount = 0;
+    committedGuard = null;
+    letterBig.textContent = '–';
+    confFill.style.width = '0%';
+    confValue.textContent = '0%';
+    top3El.innerHTML = '';
+
+    setStatus(`${mode} model ready`, 'ready');
+  }catch(err){
+    console.error(err);
+    const msg = (err && err.message) ? err.message : String(err);
+    setStatus('error: ' + msg, 'error');
+  }finally{
+    startBtn.disabled = false;
+    modeLettersBtn.disabled = false;
+    modeNumbersBtn.disabled = false;
+    modeWordsBtn.disabled = false;
+  }
+}
+
+async function switchMode(mode){
+  if(mode === currentMode || !modeLettersBtn) return;
+  await loadModel(mode);
+}
+
+async function init(){
+  await loadModel('letters');
+}
+
+async function startCamera(){
+  try{
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio:false });
+    video.srcObject = stream;
+    cameraBox.classList.remove('hidden');
+    camPlaceholder.style.display = 'none';
+    roiFrame.style.display = 'block';
+    readingBadge.style.display = 'block';
+    startBtn.disabled = true;
+    stopBtn.disabled = false;
+    pauseBtn.disabled = false;
+    running = true;
+    paused = false;
+    pauseBtn.textContent = 'Pause reading';
+    sampleTimer = setInterval(sampleFrame, SAMPLE_INTERVAL_MS);
+  }catch(err){
+    console.error(err);
+    setStatus('camera access denied', 'error');
+  }
+}
+
+function stopCamera(){
+  running = false;
+  clearInterval(sampleTimer);
+  if(stream){ stream.getTracks().forEach(t=>t.stop()); }
+  cameraBox.classList.add('hidden');
+  camPlaceholder.style.display = 'block';
+  roiFrame.style.display = 'none';
+  readingBadge.style.display = 'none';
+  startBtn.disabled = false;
+  stopBtn.disabled = true;
+  pauseBtn.disabled = true;
+  letterBig.textContent = '–';
+  confFill.style.width = '0%';
+  confValue.textContent = '0%';
+  top3El.innerHTML = '';
+}
+
+function togglePause(){
+  paused = !paused;
+  pauseBtn.textContent = paused ? 'Resume reading' : 'Pause reading';
+  readingBadge.textContent = paused ? 'paused' : 'reading center frame';
+}
+
+const hiddenCanvas = document.getElementById('hidden-canvas');
+const ctx = hiddenCanvas.getContext('2d', { willReadFrequently:true });
+
+function preprocessToTensor(){
+  // Mirror the video horizontally when sampling too (video element is CSS-mirrored for display only)
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if(!vw || !vh) return null;
+
+  // Crop to the center square/ROI matching the dashed box roughly, then resize to 224x224
+  const side = Math.min(vw, vh) * 0.72;
+  const sx = (vw - side)/2;
+  const sy = (vh - side)/2;
+
+  ctx.save();
+  ctx.clearRect(0,0,224,224);
+  ctx.drawImage(video, sx, sy, side, side, 0, 0, 224, 224);
+  const imgData = ctx.getImageData(0,0,224,224);
+  ctx.restore();
+
+  const { data } = imgData; // RGBA, 224*224*4
+  const floatData = new Float32Array(3*224*224);
+  const plane = 224*224;
+  for(let i=0; i<plane; i++){
+    const r = data[i*4]   / 255;
+    const g = data[i*4+1] / 255;
+    const b = data[i*4+2] / 255;
+    floatData[i]          = (r - MEAN[0]) / STD[0];
+    floatData[plane + i]  = (g - MEAN[1]) / STD[1];
+    floatData[2*plane+i]  = (b - MEAN[2]) / STD[2];
+  }
+  return new ort.Tensor('float32', floatData, [1,3,224,224]);
+}
+
+function softmax(arr){
+  const max = Math.max(...arr);
+  const exps = arr.map(v => Math.exp(v - max));
+  const sum = exps.reduce((a,b)=>a+b, 0);
+  return exps.map(v => v/sum);
+}
+
+// Classes to hide from predictions entirely, without needing to retrain the model.
+// The model still computes a score for these internally — we just never let them win.
+const BLOCKED_CLASSES = ['love'];
+
+async function sampleFrame(){
+  if(!running || paused || !session) return;
+  const tensor = preprocessToTensor();
+  if(!tensor) return;
+
+  try{
+    const output = await session.run({ input: tensor });
+    const logits = output.output.data;
+    const probs = softmax(Array.from(logits));
+
+    const indexed = probs
+      .map((p,i)=>[p,i])
+      .filter(([p,i]) => !BLOCKED_CLASSES.includes(CLASSES[i]))
+      .sort((a,b)=>b[0]-a[0]);
+    const [topProb, topIdx] = indexed[0];
+    const topLetter = CLASSES[topIdx];
+
+    updatePredictionUI(topLetter, topProb, indexed.slice(0,3));
+    handleWordLogic(topLetter, topProb);
+  }catch(err){
+    console.error('inference error', err);
+  }
+}
+
+function updatePredictionUI(letter, prob, top3){
+  letterBig.textContent = letter;
+  const pct = Math.round(prob*100);
+  confFill.style.width = pct + '%';
+  confValue.textContent = pct + '%';
+  top3El.innerHTML = top3.map(([p,i]) =>
+    `<span class="chip"><b>${CLASSES[i]}</b> ${Math.round(p*100)}%</span>`
+  ).join('');
+}
+
+function handleWordLogic(letter, prob){
+  if(prob < CONF_THRESHOLD){
+    holdCount = 0;
+    lastLetter = null;
+    committedGuard = null; // low confidence likely means the hand moved/changed
+    return;
+  }
+
+  if(letter === lastLetter){
+    holdCount++;
+  } else {
+    lastLetter = letter;
+    holdCount = 1;
+    if(letter !== committedGuard){
+      committedGuard = null; // sign changed, so it's eligible to commit again
+    }
+  }
+
+  if(holdCount === HOLD_FRAMES_TO_COMMIT && committedGuard !== letter){
+    wordText += letter;
+    renderWord();
+    committedGuard = letter; // block repeats until the sign changes away and back
+  }
+}
+
+spaceBtn.addEventListener('click', ()=>{ wordText += ' '; renderWord(); });
+backspaceBtn.addEventListener('click', ()=>{ wordText = wordText.slice(0,-1); renderWord(); });
+clearBtn.addEventListener('click', ()=>{ wordText = ''; renderWord(); });
+startBtn.addEventListener('click', startCamera);
+stopBtn.addEventListener('click', stopCamera);
+pauseBtn.addEventListener('click', togglePause);
+modeLettersBtn.addEventListener('click', ()=>switchMode('letters'));
+modeNumbersBtn.addEventListener('click', ()=>switchMode('numbers'));
+modeWordsBtn.addEventListener('click', ()=>switchMode('words'));
+
+renderWord();
+init();
+</script>
+</body>
+</html>

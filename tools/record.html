@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SignRead — Record Word Clips</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Caveat:wght@600;700&family=Work+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --cream:#F3E7D6; --paper:#FFFBF4; --cabernet:#3E0E1F;
+    --mulberry:#82233F; --mulberry-deep:#5C1830; --dustyrose-soft:#F3DEDC;
+    --olive:#6B6E27; --chartreuse:#AEB84A; --champagne:#B99677;
+    --ink:#301419; --dim:#7a5c62; --good:#5C7A2E; --line:rgba(62,14,31,0.14);
+  }
+  *{box-sizing:border-box;}
+  body{margin:0; background:var(--cream); color:var(--ink); font-family:'Work Sans',sans-serif;}
+  .wrap{max-width:900px; margin:0 auto; padding:32px 20px 60px;}
+  header{border-bottom:1px solid var(--line); padding-bottom:18px; margin-bottom:24px;}
+  .brand{font-family:'Fraunces',serif; font-size:26px; font-weight:700;}
+  .brand span{color:var(--mulberry);}
+  .brand-sub{color:var(--dim); font-size:13.5px; margin-top:6px;}
+
+  .panel{background:var(--paper); border:1px solid var(--line); border-radius:18px; padding:22px; margin-bottom:20px; box-shadow:0 10px 24px rgba(62,14,31,0.06);}
+  .panel-label{font-family:'Caveat',cursive; font-size:19px; font-weight:700; color:var(--mulberry-deep); margin-bottom:10px;}
+
+  select, button{font-family:'Work Sans',sans-serif; font-size:14px; font-weight:600; border-radius:30px; padding:11px 20px; border:1.5px solid var(--champagne); background:var(--paper); color:var(--ink); cursor:pointer;}
+  select{width:100%; margin-bottom:14px;}
+  button.primary{background:var(--mulberry); border-color:var(--mulberry); color:var(--cream);}
+  button.primary:hover{background:var(--mulberry-deep);}
+  button:disabled{opacity:0.4; cursor:not-allowed;}
+  button:hover{background:var(--dustyrose-soft);}
+
+  .camera-box{position:relative; aspect-ratio:4/3; background:#1a1013; border-radius:14px; overflow:hidden; margin-bottom:14px;}
+  video{width:100%; height:100%; object-fit:cover; transform:scaleX(-1);}
+  .rec-badge{position:absolute; top:12px; left:12px; background:rgba(200,60,50,0.9); color:#fff; font-weight:700; font-size:12px; padding:5px 12px; border-radius:20px; display:none; align-items:center; gap:6px;}
+  .rec-badge.active{display:flex;}
+  .rec-dot{width:8px;height:8px;border-radius:50%; background:#fff; animation:pulse 1s infinite;}
+  @keyframes pulse{50%{opacity:0.3;}}
+  .progress-track{height:6px; background:var(--dustyrose-soft); border-radius:4px; overflow:hidden; margin-bottom:14px;}
+  .progress-fill{height:100%; width:0%; background:var(--chartreuse); transition:width .1s linear;}
+
+  .controls{display:flex; gap:10px; flex-wrap:wrap;}
+  .tally{display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); gap:8px; margin-top:10px;}
+  .tally-item{background:var(--cream); border-radius:10px; padding:8px 12px; font-size:13px; display:flex; justify-content:space-between;}
+  .tally-item b{color:var(--mulberry);}
+  .status{font-size:13px; color:var(--dim); margin-top:10px;}
+  .hint{font-size:13px; color:var(--dim); line-height:1.6;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">Sign<span>Read</span> — Recorder</div>
+    <div class="brand-sub">records short clips for training the everyday-words model</div>
+  </header>
+
+  <div class="panel">
+    <div class="panel-label">1. Pick the word</div>
+    <select id="wordSelect"></select>
+    <div class="hint">Sign clearly, at a natural pace, centered in frame. Vary your position/angle slightly between takes for better data.</div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-label">2. Camera</div>
+    <div class="camera-box">
+      <video id="video" autoplay playsinline muted></video>
+      <div class="rec-badge" id="recBadge"><span class="rec-dot"></span>RECORDING</div>
+    </div>
+    <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+    <div class="controls">
+      <button class="primary" id="startBtn">Start camera</button>
+      <button id="recordBtn" disabled>Record take (~1.6s)</button>
+    </div>
+    <div class="status" id="statusText">Camera off.</div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-label">3. Progress</div>
+    <div class="tally" id="tally"></div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-label">4. When done</div>
+    <button class="primary" id="downloadBtn">Download all recordings (.zip)</button>
+    <div class="hint" style="margin-top:10px;">Unzip this in your Colab session (or upload the zip directly) — it's already organized as word/take_N/frame_00.jpg through frame_15.jpg, matching the training pipeline's format.</div>
+  </div>
+</div>
+
+<canvas id="hidden-canvas" width="224" height="224" style="display:none;"></canvas>
+
+<script>
+const WORDS = ['good','help','like','love','sorry','thank-you','hello','bye'];
+const N_FRAMES = 16;
+const CAPTURE_DURATION_MS = 1600; // ~1.6s burst, matches training extraction window
+
+let stream = null;
+let takeCounts = {};
+WORDS.forEach(w => takeCounts[w] = 0);
+let recordings = []; // { word, takeNum, frames: [blob,...] }
+
+const wordSelect = document.getElementById('wordSelect');
+const video = document.getElementById('video');
+const startBtn = document.getElementById('startBtn');
+const recordBtn = document.getElementById('recordBtn');
+const statusText = document.getElementById('statusText');
+const recBadge = document.getElementById('recBadge');
+const progressFill = document.getElementById('progressFill');
+const tallyEl = document.getElementById('tally');
+const downloadBtn = document.getElementById('downloadBtn');
+const canvas = document.getElementById('hidden-canvas');
+const ctx = canvas.getContext('2d');
+
+WORDS.forEach(w => {
+  const opt = document.createElement('option');
+  opt.value = w; opt.textContent = w;
+  wordSelect.appendChild(opt);
+});
+
+function renderTally(){
+  tallyEl.innerHTML = WORDS.map(w =>
+    `<div class="tally-item">${w} <b>${takeCounts[w]}</b></div>`
+  ).join('');
+}
+renderTally();
+
+startBtn.addEventListener('click', async () => {
+  try{
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio:false });
+    video.srcObject = stream;
+    startBtn.disabled = true;
+    recordBtn.disabled = false;
+    statusText.textContent = 'Camera ready. Pick a word and press Record.';
+  }catch(err){
+    statusText.textContent = 'Camera access denied.';
+  }
+});
+
+function grabFrame(){
+  return new Promise(resolve => {
+    ctx.drawImage(video, 0, 0, 224, 224);
+    canvas.toBlob(blob => resolve(blob), 'image/jpeg', 0.9);
+  });
+}
+
+recordBtn.addEventListener('click', async () => {
+  const word = wordSelect.value;
+  recordBtn.disabled = true;
+  wordSelect.disabled = true;
+  recBadge.classList.add('active');
+  statusText.textContent = `Recording "${word}"...`;
+
+  const frames = [];
+  const interval = CAPTURE_DURATION_MS / N_FRAMES;
+  for (let i = 0; i < N_FRAMES; i++){
+    const blob = await grabFrame();
+    frames.push(blob);
+    progressFill.style.width = `${((i+1)/N_FRAMES)*100}%`;
+    await new Promise(r => setTimeout(r, interval));
+  }
+
+  takeCounts[word]++;
+  recordings.push({ word, takeNum: takeCounts[word], frames });
+  renderTally();
+
+  recBadge.classList.remove('active');
+  progressFill.style.width = '0%';
+  recordBtn.disabled = false;
+  wordSelect.disabled = false;
+  statusText.textContent = `Saved take ${takeCounts[word]} for "${word}". Ready for next.`;
+});
+
+downloadBtn.addEventListener('click', async () => {
+  if (recordings.length === 0){
+    statusText.textContent = 'No recordings yet — record a few takes first.';
+    return;
+  }
+  statusText.textContent = 'Zipping recordings...';
+  const zip = new JSZip();
+  for (const rec of recordings){
+    const folder = zip.folder(rec.word).folder(`take_${rec.takeNum}`);
+    rec.frames.forEach((blob, i) => {
+      const num = String(i).padStart(2,'0');
+      folder.file(`frame_${num}.jpg`, blob);
+    });
+  }
+  const content = await zip.generateAsync({ type: 'blob' });
+  const url = URL.createObjectURL(content);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'signread_word_recordings.zip';
+  a.click();
+  statusText.textContent = 'Downloaded ✓';
+});
+</script>
+</body>
+</html>
